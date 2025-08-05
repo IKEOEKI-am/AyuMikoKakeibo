@@ -51,8 +51,10 @@ def handle_message(event):
     user_id = event.source.user_id
 
     # 全角スペースを半角スペースへ変換
-    received_text = raw_text.replace("　", " ")
+    received_text = received_text.replace("　", " ")
 
+    print("受け取ったメッセージ:", received_text)
+    
     if received_text == "合計":
         total_amount = calculate_total_amount()
         reply_text = f"合計金額は {total_amount}円 です。"
