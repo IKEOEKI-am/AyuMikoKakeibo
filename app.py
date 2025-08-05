@@ -9,6 +9,8 @@ from datetime import datetime
 import base64
 import json
 
+from MessageUtils import is_valid_product_message, calculate_total_amount
+
 app = Flask(__name__)
 
 # LINE Bot設定
@@ -48,15 +50,24 @@ def handle_message(event):
     received_text = event.message.text
     user_id = event.source.user_id
 
-    # Firestoreに保存
-    db.collection("messages").add({
-        "user_id": user_id,
-        "text": received_text,
-        "timestamp": datetime.utcnow()
-    })
+    # 全角スペースを半角スペースへ変換
+    received_text = raw_text.replace("　", " ")
 
+    if received_text == "合計":
+        total_amount = calculate_total_amount()
+        reply_text = f"合計金額は {total_amount}円 です。"
+    # Firestoreに保存
+    elif is_valid_product_message(received_text):
+        db.collection("messages").add({
+            "user_id": user_id,
+            "text": received_text,
+            "timestamp": datetime.utcnow()
+        })
+        reply_text = f"保存しました: {received_text}"
+    # 間違った形式
+    else:
+        reply_text = "「商品名 半角スペース 金額円」の形式で送ってね！（例：りんご 200円）"
     # 応答メッセージ
-    reply_text = f"受け取ったよ: {received_text}"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
 # Renderでは gunicorn で起動するため、app.run() は不要
