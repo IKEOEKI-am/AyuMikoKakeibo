@@ -1,15 +1,19 @@
+# 標準ライブラリ
+import os
+import base64
+import json
+from datetime import datetime, timedelta
+
+# サードパーティライブラリ
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
-import os
 import firebase_admin
 from firebase_admin import credentials, firestore
-from datetime import datetime
-import base64
-import json
 
-from MessageUtils import is_valid_product_message, calculate_total_amount
+from MessageUtils import is_valid_product_message, extract_category_and_amount, parse_month_and_category, calculate_category_total_by_month
+from Categories import EXPENSE_CATEGORIES, INCOME_CATEGORIES
 
 app = Flask(__name__)
 
@@ -45,6 +49,12 @@ def webhook():
 
     return 'OK'
 
+# UptimeRobot用のヘルスチェックエンドポイント（GET専用）
+@app.route("/healthcheck", methods=['GET'])
+def healthcheck():
+    return "OK", 200
+
+# LINEメッセージ処理
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     received_text = event.message.text
@@ -55,21 +65,31 @@ def handle_message(event):
 
     print("受け取ったメッセージ:", received_text)
     
-    if received_text == "合計":
-        total_amount = calculate_total_amount()
-        reply_text = f"合計金額は {total_amount}円 です。"
+    year, month, category = parse_month_and_category(received_text)
+    if received_text == "カテゴリー":
+        reply_lines = ["📂 カテゴリ一覧", "\n🧾 支出カテゴリ:"]
+        reply_lines += [f"- {cat}" for cat in EXPENSE_CATEGORIES]
+        reply_lines += ["\n💰 収入カテゴリ:"]
+        reply_lines += [f"- {cat}" for cat in INCOME_CATEGORIES]
+        reply_text = "\n".join(reply_lines)
+    elif year and month and category:
+        total = calculate_category_total_by_month(db, user_id, year, month, category)
+        reply_text = f"{year}年{month}月の「{category}」は {total}円 です。"
     # Firestoreに保存
     elif is_valid_product_message(received_text):
+        transaction = extract_category_and_amount(received_text)
         db.collection("messages").add({
             "user_id": user_id,
-            "text": received_text,
-            "timestamp": datetime.utcnow()
+            "tag": transaction["tag"],
+            "category": transaction["category"],
+            "amount": transaction["amount"],
+            "timestamp": datetime.utcnow(),
+            "text": received_text
         })
         reply_text = f"保存しました: {received_text}"
     # 間違った形式
     else:
-        reply_text = "「商品名 半角スペース 金額円」の形式で送ってね！（例：りんご 200円）"
+        reply_text = "商品名と金額を送って！"
     # 応答メッセージ
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
-# Renderでは gunicorn で起動するため、app.run() は不要
