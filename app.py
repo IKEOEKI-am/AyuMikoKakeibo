@@ -13,7 +13,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 from MessageUtils import is_valid_product_message, extract_category_and_amount, parse_month_and_category, calculate_category_total_by_month
-from Categories import EXPENSE_CATEGORIES, INCOME_CATEGORIES
+from Categories import EXPENSE_CATEGORIES, INCOME_CATEGORIES, FINANCIAL_ASSETS_CATEGORIES
 
 app = Flask(__name__)
 
@@ -66,30 +66,93 @@ def handle_message(event):
     print("受け取ったメッセージ:", received_text)
     
     year, month, category = parse_month_and_category(received_text)
-    if received_text == "カテゴリー":
+    if received_text in ["カテゴリー", "カテゴリ"]:
+        doc_ref = db.collection("pending_messages").document(user_id)
+        doc = doc_ref.get()
+        # 一時保存がある場合削除
+        if doc.exists and doc.to_dict().get("awaiting_confirmation"):
+            doc_ref.delete()
+            reply_text = "キャンセルしました。保存していません。"
+                
         reply_lines = ["📂 カテゴリ一覧", "\n🧾 支出カテゴリ:"]
         reply_lines += [f"- {cat}" for cat in EXPENSE_CATEGORIES]
         reply_lines += ["\n💰 収入カテゴリ:"]
         reply_lines += [f"- {cat}" for cat in INCOME_CATEGORIES]
+        reply_lines += ["\n💹 金融資産カテゴリ:"]
+        reply_lines += [f"- {cat}" for cat in FINANCIAL_ASSETS_CATEGORIES]
         reply_text = "\n".join(reply_lines)
     elif year and month and category:
+        doc_ref = db.collection("pending_messages").document(user_id)
+        doc = doc_ref.get()
+        # 一時保存がある場合削除
+        if doc.exists and doc.to_dict().get("awaiting_confirmation"):
+            doc_ref.delete()
+            reply_text = "キャンセルしました。保存していません。"
+                
         total = calculate_category_total_by_month(db, user_id, year, month, category)
         reply_text = f"{year}年{month}月の「{category}」は {total}円 です。"
     # Firestoreに保存
     elif is_valid_product_message(received_text):
+        doc_ref = db.collection("pending_messages").document(user_id)
+        doc = doc_ref.get()
+        # 一時保存がある場合削除
+        if doc.exists and doc.to_dict().get("awaiting_confirmation"):
+            doc_ref.delete()
+            reply_text = "キャンセルしました。保存していません。"
+            
         transaction = extract_category_and_amount(received_text)
-        db.collection("messages").add({
-            "user_id": user_id,
-            "tag": transaction["tag"],
-            "category": transaction["category"],
-            "amount": transaction["amount"],
-            "timestamp": datetime.utcnow(),
-            "text": received_text
-        })
-        reply_text = f"保存しました: {received_text}"
-    # 間違った形式
+        if transaction["category"] == "未分類":
+            # 一時保存（pendingフラグ付き）
+            db.collection("pending_messages").document(user_id).set({
+                "user_id": user_id,
+                "tag": transaction["tag"],
+                "category": transaction["category"],
+                "amount": transaction["amount"],
+                "timestamp": datetime.utcnow(),
+                "text": received_text,
+                "awaiting_confirmation": True
+            })
+            reply_text = (
+                f"カテゴリが未分類です。\n"
+                f"この内容を保存してもよいですか？\n"
+                f"「はい」または「いいえ」で教えてください。\n\n"
+                f"内容: {received_text}"
+            )
+        else:
+            db.collection("messages").add({
+                "user_id": user_id,
+                "tag": transaction["tag"],
+                "category": transaction["category"],
+                "amount": transaction["amount"],
+                "timestamp": datetime.utcnow(),
+                "text": received_text
+            })
+            reply_text = f"保存しました: {received_text}"
     else:
-        reply_text = "商品名と金額を送って！"
+        doc_ref = db.collection("pending_messages").document(user_id)
+        doc = doc_ref.get()
+
+        if doc.exists and doc.to_dict().get("awaiting_confirmation"):
+            if received_text.strip() == "はい":
+                # 保存してフラグ削除
+                data = doc.to_dict()
+                db.collection("messages").add({
+                    "user_id": data["user_id"],
+                    "tag": data["tag"],
+                    "category": data["category"],
+                    "amount": data["amount"],
+                    "timestamp": datetime.utcnow(),
+                    "text": data["text"]
+                })
+                doc_ref.delete()
+                reply_text = f"保存しました: {data['text']}"
+            else:
+                # 「はい」以外 → 削除
+                doc_ref.delete()
+                reply_text = "キャンセルしました。保存していません。"
+        # 間違った形式
+        else:
+            reply_text = "商品名と金額を送って！"
     # 応答メッセージ
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 

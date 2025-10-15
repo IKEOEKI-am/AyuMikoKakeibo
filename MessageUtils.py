@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 # サードパーティライブラリ
 from firebase_admin import firestore
 
-from Categories import EXPENSE_CATEGORIES, INCOME_CATEGORIES
+from Categories import EXPENSE_CATEGORIES, INCOME_CATEGORIES, FINANCIAL_ASSETS_CATEGORIES
 
 def convert_zen_to_han(text):
     # 全角数字を半角数字に変換（Unicodeベース）
@@ -24,7 +24,7 @@ def match_category(raw_text, category_list):
 
 def classify_transaction(text):
     text = convert_zen_to_han(text)
-    pattern = r"^([\wぁ-んァ-ン一-龥ー\s]+?)[\s]*([\d,]+)円?$"
+    pattern = r"^([^\d]+?)([\d,]+)円?$"
     match = re.match(pattern, text)
     if not match:
         return {"tag": "不明", "category": "未分類", "amount": None}
@@ -41,6 +41,9 @@ def classify_transaction(text):
         category = cat
     elif cat := match_category(raw_category, EXPENSE_CATEGORIES):
         tag = "支出"
+        category = cat
+    elif cat := match_category(raw_category, FINANCIAL_ASSETS_CATEGORIES):
+        tag = "金融資産"
         category = cat
     else:
         tag = "不明"
